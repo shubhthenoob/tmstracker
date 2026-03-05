@@ -1,0 +1,201 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+/**
+ * API endpoint to sync Google Sheets data to the database
+ * Triggered by Vercel Cron jobs at 11 AM and 11 PM UTC
+ */
+export async function GET(request: NextRequest) {
+  const startTime = Date.now();
+  
+  try {
+    
+    // Verify the request is from Vercel Cron
+    const authHeader = request.headers.get('authorization');
+    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    // Get Google Sheets data
+    const sheetData = await fetchGoogleSheetData();
+    
+    if (!sheetData || sheetData.length === 0) {
+      throw new Error('No data retrieved from Google Sheets');
+    }
+
+    // Sync to database
+    const result = await syncTasksToDatabase(sheetData);
+    
+    const duration = Date.now() - startTime;
+
+    // Log the sync operation
+    await logSyncOperation({
+      status: 'success',
+      rows_synced: result.synced_count,
+      duration_ms: duration,
+      error_message: null,
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: 'Sync completed successfully',
+      rows_synced: result.synced_count,
+      duration_ms: duration,
+      timestamp: new Date().toISOString(),
+    });
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    // Log the failed sync operation
+    await logSyncOperation({
+      status: 'failed',
+      rows_synced: 0,
+      duration_ms: Date.now() - startTime,
+      error_message: errorMessage,
+    });
+
+    console.error('[Cron] Sync failed:', errorMessage);
+    
+    return NextResponse.json(
+      {
+        success: false,
+        error: errorMessage,
+        timestamp: new Date().toISOString(),
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Fetch data from Google Sheets API
+ * Requires GOOGLE_SHEETS_API_KEY and GOOGLE_SHEETS_ID env vars
+ */
+async function fetchGoogleSheetData() {
+  const apiKey = process.env.GOOGLE_SHEETS_API_KEY;
+  const sheetId = process.env.GOOGLE_SHEETS_ID;
+  const sheetRange = process.env.GOOGLE_SHEETS_RANGE || 'Sheet1!A2:G1000';
+
+  if (!apiKey || !sheetId) {
+    throw new Error('Missing Google Sheets configuration');
+  }
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}?key=${apiKey}`;
+
+  const response = await fetch(url);
+  
+  if (!response.ok) {
+    throw new Error(`Google Sheets API error: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  
+  if (!data.values || data.values.length === 0) {
+    return [];
+  }
+
+  // Map sheet rows to task objects
+  return data.values.map((row: any[]) => ({
+    id: parseInt(row[0]) || 0,
+    date: row[1] || '',
+    task: row[2] || '',
+    assignee: row[3] || '',
+    hours: parseFloat(row[4]) || 0,
+    type: row[5] || '',
+    status: row[6] || '',
+  }));
+}
+
+/**
+ * Sync tasks to Neon PostgreSQL database using upsert logic
+ */
+async function syncTasksToDatabase(tasks: any[]) {
+  const connectionString = process.env.DATABASE_URL;
+  
+  if (!connectionString) {
+    throw new Error('DATABASE_URL not configured');
+  }
+
+  // Using node-postgres for database operations
+  const { Client } = require('pg');
+  const client = new Client({ connectionString });
+
+  try {
+    await client.connect();
+
+    let syncedCount = 0;
+
+    // Use upsert logic to handle updates and inserts
+    const query = `
+      INSERT INTO tasks (id, date, task, assignee, hours, type, status, last_synced_at, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE SET
+        date = EXCLUDED.date,
+        task = EXCLUDED.task,
+        assignee = EXCLUDED.assignee,
+        hours = EXCLUDED.hours,
+        type = EXCLUDED.type,
+        status = EXCLUDED.status,
+        last_synced_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id;
+    `;
+
+    // Execute upsert for each task
+    for (const task of tasks) {
+      await client.query(query, [
+        task.id,
+        task.date,
+        task.task,
+        task.assignee,
+        task.hours,
+        task.type,
+        task.status,
+      ]);
+      syncedCount++;
+    }
+
+    await client.end();
+    return { synced_count: syncedCount };
+
+  } catch (error) {
+    await client.end();
+    throw error;
+  }
+}
+
+/**
+ * Log sync operation to sync_logs table
+ */
+async function logSyncOperation(data: {
+  status: 'success' | 'failed' | 'pending';
+  rows_synced: number;
+  duration_ms: number;
+  error_message: string | null;
+}) {
+  const connectionString = process.env.DATABASE_URL;
+  
+  if (!connectionString) {
+    console.error('[Cron] DATABASE_URL not configured, skipping log');
+    return;
+  }
+
+  try {
+    const { Client } = require('pg');
+    const client = new Client({ connectionString });
+    await client.connect();
+
+    await client.query(
+      `INSERT INTO sync_logs (sync_time, status, rows_synced, error_message, duration_ms, created_at)
+       VALUES (CURRENT_TIMESTAMP, $1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+      [data.status, data.rows_synced, data.error_message, data.duration_ms]
+    );
+
+    await client.end();
+  } catch (error) {
+    console.error('[Cron] Failed to log sync operation:', error);
+  }
+}
