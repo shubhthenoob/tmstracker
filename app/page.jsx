@@ -325,7 +325,7 @@ function MiniDatePills({filt,setFilt}){
   </div>;
 }
 
-function TrendBars({data,h=80}){
+function TrendBars({data,h=80,onBarClick}){
   if(!data.length) return <div style={{height:h+26,display:"flex",alignItems:"center",justifyContent:"center",color:C.g4,fontSize:12,fontFamily:F}}>No data for this range</div>;
   const max=Math.max(...data.map(d=>d.v),1);
   const bw=20,gap=5,tw=Math.max((bw+gap)*data.length,280);
@@ -333,17 +333,17 @@ function TrendBars({data,h=80}){
     <svg width={tw} height={h+28} style={{display:"block",minWidth:"100%"}}>
       {data.map((d,i)=>{
         const bh=Math.max((d.v/max)*(h-4),3),x=i*(bw+gap),y=h-bh;
-        return <g key={i}>
-          <rect x={x} y={y} width={bw} height={bh} rx={4} fill={C.brand} opacity={0.85}/>
+        return <g key={i} style={{cursor:"pointer"}} onClick={()=>onBarClick?.(d)}>
+          <rect x={x} y={y} width={bw} height={bh} rx={4} fill={C.brand} opacity={0.85} style={{transition:"opacity 0.2s"}}/>
           <text x={x+bw/2} y={h+20} textAnchor="middle" fill={C.g4} fontSize={9} fontFamily="DM Sans,sans-serif">{d.l}</text>
-          <title>{d.fl}: {d.v}h</title>
+          <title>{d.fl}: {d.v}h - Click for details</title>
         </g>;
       })}
     </svg>
   </div>;
 }
 
-function Donut({segs,size=104}){
+function Donut({segs,size=104,onSegmentClick}){
   const tot=segs.reduce((s,d)=>s+(d.v||0),0);
   if(!tot) return <div style={{width:size,height:size,borderRadius:"50%",background:C.surfaceAlt,border:`2px dashed ${C.border}`}}/>;
   let cum=0;const r=38,cx=size/2,cy=size/2;
@@ -352,8 +352,8 @@ function Donut({segs,size=104}){
     const x1=cx+r*Math.cos(a0),y1=cy+r*Math.sin(a0),x2=cx+r*Math.cos(a1),y2=cy+r*Math.sin(a1);
     return{...d,path:`M${cx},${cy} L${x1},${y1} A${r},${r},0,${p>0.5?1:0},1,${x2},${y2}Z`};
   });
-  return <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-    {paths.map((s,i)=><path key={i} d={s.path} fill={s.c} opacity={0.9}/>)}
+  return <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{cursor:"pointer"}}>
+    {paths.map((s,i)=><path key={i} d={s.path} fill={s.c} opacity={0.9} style={{cursor:"pointer",transition:"opacity 0.2s"}} onClick={()=>onSegmentClick?.(s)}/>)}
     <circle cx={cx} cy={cy} r={23} fill={C.surface}/>
     <text x={cx} y={cy+4} textAnchor="middle" fill={C.g8} fontSize={12} fontWeight={700} fontFamily="DM Sans,sans-serif">{tot}</text>
   </svg>;
@@ -406,6 +406,9 @@ export default function App(){
   const [tF,setTF]=useState({ft:null,cs:null,ce:null,member:"All"});
   const [hF,setHF]=useState({ft:null,cs:null,ce:null,type:"All"});
   const [yF,setYF]=useState({ft:null,cs:null,ce:null,member:"All"});
+  
+  // Chart modal state
+  const [modal,setModal]=useState(null);
 
   const fetch_=useCallback(async()=>{
     setLoading(true);
@@ -487,6 +490,21 @@ export default function App(){
 
   // Helper: today badge for Daily tab header
   const isToday = resolvedD===TODAY;
+  
+  // Helper: Get tasks for modal
+  const getModalData=()=>{
+    if(!modal) return{title:"",tasks:[]};
+    if(modal.type==="date"){
+      const tasksForDate=data.filter(r=>r.date===modal.date&&applyChartFilt([r],tF).length>0);
+      return{title:`${modal.date}`,tasks:tasksForDate,subtitle:`${tasksForDate.length} tasks · ${tasksForDate.reduce((s,r)=>s+(r.hours||0),0).toFixed(1)}h`};
+    }
+    if(modal.type==="type"){
+      const tasksForType=data.filter(r=>r.type===modal.label&&applyChartFilt([r],yF).length>0);
+      return{title:`${modal.label}`,tasks:tasksForType,subtitle:`${tasksForType.length} tasks · ${tasksForType.reduce((s,r)=>s+(r.hours||0),0).toFixed(1)}h`};
+    }
+    return{title:"",tasks:[]};
+  };
+  const modalData=getModalData();
 
   return <div style={{minHeight:"100vh",background:C.bg,fontFamily:F,color:C.g9}}>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet"/>
@@ -588,7 +606,7 @@ export default function App(){
             <Sel value={tF.member} onChange={v=>setTF({...tF,member:v})} opts={[{v:"All",l:"All Members"},...allMembers.map(v=>({v,l:v}))]} minW={90}/>
             <MiniDatePills filt={tF} setFilt={setTF}/>
           </>}/>
-          <div style={{padding:"12px 16px"}}><TrendBars data={trendData}/></div>
+          <div style={{padding:"12px 16px"}}><TrendBars data={trendData} onBarClick={d=>setModal({type:"date",date:d.fl})}/></div>
         </Card>
 
         {/* Hours + Types */}
@@ -624,7 +642,7 @@ export default function App(){
               <MiniDatePills filt={yF} setFilt={setYF}/>
             </>}/>
             <div style={{padding:"12px 16px",display:"flex",gap:14,alignItems:"flex-start"}}>
-              <div style={{flexShrink:0}}><Donut segs={typeDonut} size={104}/></div>
+              <div style={{flexShrink:0}}><Donut segs={typeDonut} size={104} onSegmentClick={s=>setModal({type:"type",label:s.l})}/></div>
               <div style={{flex:1,minWidth:0,paddingTop:4,display:"flex",flexDirection:"column",gap:7}}>
                 {typeData.map(([type,hrs])=><div key={type} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{display:"flex",alignItems:"center",gap:7}}>
@@ -864,5 +882,45 @@ export default function App(){
         <span style={{fontSize:11,color:C.g4,fontFamily:F}}>Taabi TMS Tracker · <a href={`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`} target="_blank" rel="noreferrer" style={{color:C.brand,textDecoration:"none",fontWeight:600}}>Open Sheet ↗</a></span>
       </div>
     </main>
+    
+    {/* Chart Details Modal */}
+    {modal&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,padding:16}} onClick={()=>setModal(null)}>
+      <div style={{background:C.surface,borderRadius:16,maxWidth:600,width:"100%",maxHeight:"80vh",overflow:"auto",boxShadow:"0 20px 25px -5px rgba(0,0,0,0.1)",position:"relative"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"20px 24px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start",position:"sticky",top:0,background:C.surface,zIndex:501}}>
+          <div>
+            <h2 style={{fontSize:18,fontWeight:800,color:C.g9,fontFamily:F,marginBottom:2}}>{modalData.title}</h2>
+            {modalData.subtitle&&<p style={{fontSize:13,color:C.g4,fontFamily:F}}>{modalData.subtitle}</p>}
+          </div>
+          <button onClick={()=>setModal(null)} style={{background:"none",border:"none",fontSize:24,color:C.g4,cursor:"pointer",padding:0,width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+        </div>
+        <div style={{padding:"16px 24px"}}>
+          {modalData.tasks.length===0?<div style={{textAlign:"center",padding:"32px 16px",color:C.g4,fontFamily:F}}>No tasks found</div>:
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {modalData.tasks.map(t=>{
+                const mm=gm(t.assignee);
+                const sc=SC[t.status];
+                return <div key={t.id} style={{padding:12,borderRadius:10,border:`1px solid ${C.border}`,display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <Av name={t.assignee} size={32}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                      <span style={{fontSize:13,fontWeight:700,color:C.g9,fontFamily:F,flex:1}}>{t.task}</span>
+                      <span style={{fontSize:11,fontWeight:700,fontFamily:F,color:sc?.c||C.g4,background:sc?.bg||C.surfaceAlt,padding:"2px 6px",borderRadius:4,flexShrink:0}}>{t.status}</span>
+                    </div>
+                    <div style={{display:"flex",gap:8,fontSize:11,color:C.g5,fontFamily:F,marginBottom:4}}>
+                      <span>{t.assignee}</span>
+                      <span>·</span>
+                      <span style={{background:TC[t.type]||C.g4,color:"#fff",padding:"1px 6px",borderRadius:3,fontSize:10,fontWeight:600}}>{t.type}</span>
+                      <span>·</span>
+                      <span style={{fontWeight:700}}>{t.hours}h</span>
+                    </div>
+                    <span style={{fontSize:10,color:C.g4,fontFamily:F}}>{t.date}</span>
+                  </div>
+                </div>;
+              })}
+            </div>
+          }
+        </div>
+      </div>
+    </div>}
   </div>;
 }
