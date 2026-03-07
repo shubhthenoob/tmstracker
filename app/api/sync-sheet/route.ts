@@ -8,10 +8,12 @@ export async function GET(request: NextRequest) {
   const startTime = Date.now();
   
   try {
+    console.log('[Sync] Starting sync operation at', new Date().toISOString());
     
     // Verify the request is from Vercel Cron
     const authHeader = request.headers.get('authorization');
     if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      console.error('[Sync] Unauthorized request');
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -19,13 +21,17 @@ export async function GET(request: NextRequest) {
     }
 
     // Get Google Sheets data
+    console.log('[Sync] Fetching Google Sheets data...');
     const sheetData = await fetchGoogleSheetData();
     
     if (!sheetData || sheetData.length === 0) {
       throw new Error('No data retrieved from Google Sheets');
     }
 
+    console.log('[Sync] Received', sheetData.length, 'rows from Google Sheets');
+
     // Sync to database
+    console.log('[Sync] Starting database sync...');
     const result = await syncTasksToDatabase(sheetData);
     
     const duration = Date.now() - startTime;
@@ -37,6 +43,8 @@ export async function GET(request: NextRequest) {
       duration_ms: duration,
       error_message: null,
     });
+
+    console.log('[Sync] Sync completed successfully in', duration, 'ms');
 
     return NextResponse.json({
       success: true,
@@ -57,7 +65,7 @@ export async function GET(request: NextRequest) {
       error_message: errorMessage,
     });
 
-    console.error('[Cron] Sync failed:', errorMessage);
+    console.error('[Sync] Sync failed:', errorMessage);
     
     return NextResponse.json(
       {
@@ -80,25 +88,30 @@ async function fetchGoogleSheetData() {
   const sheetRange = process.env.GOOGLE_SHEETS_RANGE || 'Sheet1!A2:G1000';
 
   if (!apiKey || !sheetId) {
-    throw new Error('Missing Google Sheets configuration');
+    throw new Error('Missing Google Sheets configuration (GOOGLE_SHEETS_API_KEY or GOOGLE_SHEETS_ID)');
   }
 
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}?key=${apiKey}`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(sheetRange)}?key=${apiKey}`;
+  console.log('[Sheets API] Fetching from URL:', url.replace(apiKey, '***'));
 
   const response = await fetch(url);
   
   if (!response.ok) {
-    throw new Error(`Google Sheets API error: ${response.statusText}`);
+    const errorText = await response.text();
+    console.error('[Sheets API] API error response:', errorText);
+    throw new Error(`Google Sheets API error: ${response.status} ${response.statusText}`);
   }
 
   const data = await response.json();
+  console.log('[Sheets API] Raw data received:', JSON.stringify(data, null, 2));
   
   if (!data.values || data.values.length === 0) {
+    console.warn('[Sheets API] No data found in sheet');
     return [];
   }
 
   // Map sheet rows to task objects
-  return data.values.map((row: any[]) => ({
+  const mappedData = data.values.map((row: any[]) => ({
     id: parseInt(row[0]) || 0,
     date: row[1] || '',
     task: row[2] || '',
@@ -107,6 +120,9 @@ async function fetchGoogleSheetData() {
     type: row[5] || '',
     status: row[6] || '',
   }));
+
+  console.log('[Sheets API] Mapped data count:', mappedData.length);
+  return mappedData;
 }
 
 /**
@@ -125,8 +141,10 @@ async function syncTasksToDatabase(tasks: any[]) {
 
   try {
     await client.connect();
+    console.log('[DB] Connected to database, syncing', tasks.length, 'tasks');
 
     let syncedCount = 0;
+    let errorCount = 0;
 
     // Use upsert logic to handle updates and inserts
     const query = `
@@ -146,23 +164,36 @@ async function syncTasksToDatabase(tasks: any[]) {
 
     // Execute upsert for each task
     for (const task of tasks) {
-      await client.query(query, [
-        task.id,
-        task.date,
-        task.task,
-        task.assignee,
-        task.hours,
-        task.type,
-        task.status,
-      ]);
-      syncedCount++;
+      try {
+        const result = await client.query(query, [
+          task.id,
+          task.date,
+          task.task,
+          task.assignee,
+          task.hours,
+          task.type,
+          task.status,
+        ]);
+        syncedCount++;
+        console.log('[DB] Synced task:', task.id, result.rows[0]?.id);
+      } catch (taskError) {
+        errorCount++;
+        console.error('[DB] Failed to sync task:', task.id, taskError);
+      }
     }
+
+    console.log('[DB] Sync complete. Success:', syncedCount, 'Errors:', errorCount);
 
     await client.end();
     return { synced_count: syncedCount };
 
   } catch (error) {
-    await client.end();
+    console.error('[DB] Database connection error:', error);
+    try {
+      await client.end();
+    } catch (e) {
+      // ignore
+    }
     throw error;
   }
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
 interface SyncLog {
   id: number;
@@ -21,8 +22,8 @@ export default function SyncStatusPage() {
 
   useEffect(() => {
     fetchSyncLogs();
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchSyncLogs, 30000);
+    // Refresh every 5 seconds to catch real-time updates
+    const interval = setInterval(fetchSyncLogs, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -43,6 +44,8 @@ export default function SyncStatusPage() {
 
   async function triggerManualSync() {
     setManualSyncLoading(true);
+    const toastId = toast.loading('Initiating sync...');
+    
     try {
       // Call a dedicated server-side proxy endpoint so the CRON_SECRET
       // never has to be exposed as a NEXT_PUBLIC_ variable.
@@ -50,12 +53,26 @@ export default function SyncStatusPage() {
 
       if (response.ok) {
         const data = await response.json();
-        console.log('Sync triggered successfully:', data);
-        setTimeout(fetchSyncLogs, 1000);
+        console.log('[v0] Sync triggered successfully:', data);
+        
+        toast.dismiss(toastId);
+        toast.success(`Sync completed! ${data.rows_synced} rows synced in ${data.duration_ms}ms`, {
+          duration: 5000,
+        });
+        
+        // Fetch immediately and then again after 500ms for updates
+        await fetchSyncLogs();
+        setTimeout(fetchSyncLogs, 500);
       } else {
+        const errorData = await response.json();
+        toast.dismiss(toastId);
+        toast.error(`Sync failed: ${errorData.error}`, { duration: 5000 });
         console.error('Failed to trigger sync:', response.statusText);
       }
     } catch (error) {
+      toast.dismiss(toastId);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      toast.error(`Error triggering sync: ${errorMessage}`, { duration: 5000 });
       console.error('Error triggering sync:', error);
     } finally {
       setManualSyncLoading(false);
