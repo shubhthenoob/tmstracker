@@ -17,11 +17,12 @@ async function testInsert() {
 
     // Test inserting a sample task
     console.log('[v0] Inserting test task...');
+    const sheetId = process.env.GOOGLE_SHEETS_ID || 'test-sheet';
     const result = await client.query(
-      `INSERT INTO tasks (id, date, task_name, assignee, hours, type, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `INSERT INTO tasks (id, date, task_name, assignee, hours, type, status, sheet_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        RETURNING *`,
-      [999, '2024-03-19', 'Test Task', 'Test User', 8, 'development', 'pending']
+      [999, '2024-03-19', 'Test Task', 'Test User', 8, 'development', 'pending', sheetId]
     );
 
     console.log('[v0] Insert successful!');

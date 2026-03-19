@@ -134,9 +134,10 @@ async function syncTasksToDatabase(tasks: any[]) {
     let syncedCount = 0;
 
     // Use upsert logic to handle updates and inserts
+    const sheetId = process.env.GOOGLE_SHEETS_ID || 'default-sheet';
     const query = `
-      INSERT INTO tasks (id, date, task_name, assignee, hours, type, status, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO tasks (id, date, task_name, assignee, hours, type, status, sheet_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (id) DO UPDATE SET
         date = EXCLUDED.date,
         task_name = EXCLUDED.task_name,
@@ -160,6 +161,7 @@ async function syncTasksToDatabase(tasks: any[]) {
           task.hours,
           task.type,
           task.status,
+          sheetId,
         ]);
         syncedCount++;
       } catch (error) {
@@ -199,8 +201,8 @@ async function logSyncOperation(data: {
     await client.connect();
 
     await client.query(
-      `INSERT INTO sync_logs (synced_at, status, rows_synced, created_at)
-       VALUES (CURRENT_TIMESTAMP, $1, $2, CURRENT_TIMESTAMP)`,
+      `INSERT INTO sync_logs (synced_at, status, rows_synced)
+       VALUES (CURRENT_TIMESTAMP, $1, $2)`,
       [data.status, data.rows_synced]
     );
 
