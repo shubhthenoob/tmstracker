@@ -34,8 +34,6 @@ export async function GET(request: NextRequest) {
     await logSyncOperation({
       status: 'success',
       rows_synced: result.synced_count,
-      duration_ms: duration,
-      error_message: null,
     });
 
     return NextResponse.json({
@@ -53,8 +51,6 @@ export async function GET(request: NextRequest) {
     await logSyncOperation({
       status: 'failed',
       rows_synced: 0,
-      duration_ms: Date.now() - startTime,
-      error_message: errorMessage,
     });
 
     console.error('[Cron] Sync failed:', errorMessage);
@@ -130,16 +126,15 @@ async function syncTasksToDatabase(tasks: any[]) {
 
     // Use upsert logic to handle updates and inserts
     const query = `
-      INSERT INTO tasks (id, date, task, assignee, hours, type, status, last_synced_at, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO tasks (id, date, task_name, assignee, hours, type, status, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (id) DO UPDATE SET
         date = EXCLUDED.date,
-        task = EXCLUDED.task,
+        task_name = EXCLUDED.task_name,
         assignee = EXCLUDED.assignee,
         hours = EXCLUDED.hours,
         type = EXCLUDED.type,
         status = EXCLUDED.status,
-        last_synced_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
       RETURNING id;
     `;
@@ -173,8 +168,6 @@ async function syncTasksToDatabase(tasks: any[]) {
 async function logSyncOperation(data: {
   status: 'success' | 'failed' | 'pending';
   rows_synced: number;
-  duration_ms: number;
-  error_message: string | null;
 }) {
   const connectionString = process.env.DATABASE_URL;
   
@@ -189,9 +182,9 @@ async function logSyncOperation(data: {
     await client.connect();
 
     await client.query(
-      `INSERT INTO sync_logs (sync_time, status, rows_synced, error_message, duration_ms, created_at)
-       VALUES (CURRENT_TIMESTAMP, $1, $2, $3, $4, CURRENT_TIMESTAMP)`,
-      [data.status, data.rows_synced, data.error_message, data.duration_ms]
+      `INSERT INTO sync_logs (synced_at, status, rows_synced, created_at)
+       VALUES (CURRENT_TIMESTAMP, $1, $2, CURRENT_TIMESTAMP)`,
+      [data.status, data.rows_synced]
     );
 
     await client.end();

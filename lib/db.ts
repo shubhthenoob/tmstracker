@@ -16,7 +16,7 @@ export async function fetchTasksFromDB() {
     await client.connect();
 
     const result = await client.query(
-      `SELECT id, date, task, assignee, hours, type, status 
+      `SELECT id, date, task_name, assignee, hours, type, status 
        FROM tasks 
        ORDER BY date DESC, id DESC`
     );
@@ -26,7 +26,7 @@ export async function fetchTasksFromDB() {
     return result.rows.map((row) => ({
       id: row.id,
       date: row.date,
-      task: row.task,
+      task: row.task_name,
       assignee: row.assignee,
       hours: parseFloat(row.hours),
       type: row.type,
@@ -95,8 +95,8 @@ export async function getSyncStats() {
       `SELECT 
         status,
         COUNT(*) as count,
-        AVG(duration_ms) as avg_duration,
-        MAX(sync_time) as last_sync
+        AVG(EXTRACT(EPOCH FROM (synced_at - created_at))) as avg_duration,
+        MAX(synced_at) as last_sync
        FROM sync_logs
        GROUP BY status`
     );
