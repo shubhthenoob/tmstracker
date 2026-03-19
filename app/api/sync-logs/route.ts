@@ -20,24 +20,26 @@ export async function GET(request: NextRequest) {
     await client.connect();
 
     // Fetch last 50 sync logs
+    console.log('[v0] Fetching sync logs from database');
     const result = await client.query(
-      `SELECT id, sync_time, status, rows_synced, error_message, duration_ms
+      `SELECT id, synced_at, status, rows_synced, created_at
        FROM sync_logs
-       ORDER BY sync_time DESC
+       ORDER BY synced_at DESC
        LIMIT 50`
     );
 
+    console.log('[v0] Retrieved', result.rows.length, 'sync logs');
     await client.end();
 
     return NextResponse.json({
       success: true,
       logs: result.rows.map((row: any) => ({
         id: row.id,
-        sync_time: row.sync_time,
+        sync_time: row.synced_at,
         status: row.status,
         rows_synced: row.rows_synced,
-        error_message: row.error_message,
-        duration_ms: row.duration_ms,
+        error_message: null,
+        duration_ms: 0,
       })),
     });
 

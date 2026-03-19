@@ -12,6 +12,7 @@ export async function GET(request: NextRequest) {
     // Verify the request is from Vercel Cron
     const authHeader = request.headers.get('authorization');
     if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      console.error('[v0] Authorization failed. Expected Bearer token');
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -19,14 +20,18 @@ export async function GET(request: NextRequest) {
     }
 
     // Get Google Sheets data
+    console.log('[v0] Fetching Google Sheets data...');
     const sheetData = await fetchGoogleSheetData();
+    console.log('[v0] Retrieved', sheetData.length, 'rows from Google Sheets');
     
     if (!sheetData || sheetData.length === 0) {
       throw new Error('No data retrieved from Google Sheets');
     }
 
     // Sync to database
+    console.log('[v0] Starting sync to database...');
     const result = await syncTasksToDatabase(sheetData);
+    console.log('[v0] Sync completed:', result.synced_count, 'rows synced');
     
     const duration = Date.now() - startTime;
 
@@ -81,6 +86,7 @@ async function fetchGoogleSheetData() {
 
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetRange}?key=${apiKey}`;
 
+  console.log('[v0] Fetching from:', url.split('?')[0] + '?key=***');
   const response = await fetch(url);
   
   if (!response.ok) {
@@ -90,8 +96,11 @@ async function fetchGoogleSheetData() {
   const data = await response.json();
   
   if (!data.values || data.values.length === 0) {
+    console.log('[v0] No data in Google Sheets response');
     return [];
   }
+
+  console.log('[v0] Raw data from sheets:', JSON.stringify(data.values.slice(0, 2)));
 
   // Map sheet rows to task objects
   return data.values.map((row: any[]) => ({
@@ -141,22 +150,30 @@ async function syncTasksToDatabase(tasks: any[]) {
 
     // Execute upsert for each task
     for (const task of tasks) {
-      await client.query(query, [
-        task.id,
-        task.date,
-        task.task,
-        task.assignee,
-        task.hours,
-        task.type,
-        task.status,
-      ]);
-      syncedCount++;
+      try {
+        console.log('[v0] Upserting task:', task.id, task.task);
+        await client.query(query, [
+          task.id,
+          task.date,
+          task.task,
+          task.assignee,
+          task.hours,
+          task.type,
+          task.status,
+        ]);
+        syncedCount++;
+      } catch (error) {
+        console.error('[v0] Error upserting task', task.id, ':', error instanceof Error ? error.message : error);
+        throw error;
+      }
     }
 
+    console.log('[v0] All tasks synced successfully. Count:', syncedCount);
     await client.end();
     return { synced_count: syncedCount };
 
   } catch (error) {
+    console.error('[v0] Database sync error:', error instanceof Error ? error.message : error);
     await client.end();
     throw error;
   }
